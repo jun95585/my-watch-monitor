@@ -1,62 +1,63 @@
 import requests
 import os
-import re
 
-def get_london_gold():
-    print("--- 尝试获取伦敦金 ---")
-    url = "https://query1.finance.yahoo.com/v8/finance/chart/XAUUSD=X"
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    }
+def get_gold_prices():
+    london_price = None
+    shanghai_price = None
+    
+    # --- 尝试获取伦敦金 (使用公共开放 API) ---
+    print("--- 正在通过公共 API 获取伦敦金 ---")
+    # 使用一个无需 Key 的快速镜像接口
     try:
-        res = requests.get(url, headers=headers, timeout=15)
-        print(f"Yahoo 状态码: {res.status_code}")
-        if res.status_code != 200:
-            print(f"Yahoo 错误返回预览: {res.text[:200]}") # 打印前200个字符
-        
-        data = res.json()
-        price = data['chart']['result'][0]['meta']['regularMarketPrice']
-        return price
+        url_l = "https://api.gold-api.com/price/XAU"
+        res_l = requests.get(url_l, timeout=15)
+        if res_l.status_code == 200:
+            london_price = res_l.json().get('price')
+            print(f"伦敦金获取成功: {london_price}")
     except Exception as e:
-        print(f"伦敦金解析异常: {e}")
-        return None
+        print(f"伦敦金获取失败: {e}")
 
-def get_shanghai_gold():
-    print("\n--- 尝试获取上海金 ---")
-    # 换一个更宽松的新浪接口
-    url = "http://hq.sinajs.cn/list=s_au9999"
-    headers = {
-        'Referer': 'http://finance.sina.com.cn',
-        'User-Agent': 'Mozilla/5.0'
-    }
+    # --- 尝试获取上海金 (使用东方财富海外 API 节点) ---
+    print("\n--- 正在通过东方财富获取上海金 ---")
     try:
-        res = requests.get(url, headers=headers, timeout=15)
-        print(f"新浪状态码: {res.status_code}")
-        # 新浪返回的是 GBK 编码，需特殊处理
-        res.encoding = 'gbk'
-        content = res.text
-        print(f"新浪返回原始内容: {content}")
-        
-        match = re.search(r'"([^"]+)"', content)
-        if match:
-            fields = match.group(1).split(',')
-            if len(fields) > 1:
-                return fields[1]
-        return None
+        # 东方财富 Au9999 的代码是 10.Au9999
+        url_s = "https://push2.eastmoney.com/api/qt/stock/get?secid=10.Au9999&fields=f43"
+        res_s = requests.get(url_s, timeout=15)
+        if res_s.status_code == 200:
+            # 这里的 f43 对应的是最新价，数值需要除以 100
+            raw_price = res_s.json()['data']['f43']
+            shanghai_price = raw_price / 100
+            print(f"上海金获取成功: {shanghai_price}")
     except Exception as e:
-        print(f"上海金解析异常: {e}")
-        return None
+        print(f"上海金获取失败: {e}")
+        
+    return london_price, shanghai_price
+
+def send_to_slack(lp, sp):
+    webhook_url = os.environ.get('SLACK_WEBHOOK_URL')
+    if not webhook_url: return
+
+    payload = {
+        "blocks": [
+            {
+                "type": "header",
+                "text": {"type": "plain_text", "text": "💰 黄金双线行情"}
+            },
+            {
+                "type": "section",
+                "fields": [
+                    {"type": "mrkdwn", "text": f"*伦敦金 (USD/oz)*\n`{lp or '获取失败'}`"},
+                    {"type": "mrkdwn", "text": f"*上海金 (元/克)*\n`{sp or '获取失败'}`"}
+                ]
+            }
+        ]
+    }
+    requests.post(webhook_url, json=payload)
 
 if __name__ == "__main__":
-    l_price = get_london_gold()
-    s_price = get_shanghai_gold()
-    
-    print("\n--- 最终结果 ---")
-    print(f"伦敦金: {l_price}")
-    print(f"上海金: {s_price}")
-    
-    # 只有成功获取到至少一个价格时才尝试推送
-    webhook_url = os.environ.get('SLACK_WEBHOOK_URL')
-    if (l_price or s_price) and webhook_url:
-        payload = {"text": f"📢 监控测试\n伦敦金: {l_price}\n上海金: {s_price}"}
-        requests.post(webhook_url, json=payload)
+    l, s = get_gold_prices()
+    if l or s:
+        send_to_slack(l, s)
+        print("\n✅ 推送任务完成")
+    else:
+        print("\n❌ 依然无法获取任何数据，请检查网络节点")
