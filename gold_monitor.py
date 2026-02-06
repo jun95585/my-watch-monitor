@@ -3,81 +3,60 @@ import os
 import re
 
 def get_london_gold():
-    """获取伦敦金现货价格 (美元/盎司)"""
+    print("--- 尝试获取伦敦金 ---")
     url = "https://query1.finance.yahoo.com/v8/finance/chart/XAUUSD=X"
-    headers = {'User-Agent': 'Mozilla/5.0'}
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
     try:
-        res = requests.get(url, headers=headers, timeout=10)
+        res = requests.get(url, headers=headers, timeout=15)
+        print(f"Yahoo 状态码: {res.status_code}")
+        if res.status_code != 200:
+            print(f"Yahoo 错误返回预览: {res.text[:200]}") # 打印前200个字符
+        
         data = res.json()
-        return data['chart']['result'][0]['meta']['regularMarketPrice']
-    except:
+        price = data['chart']['result'][0]['meta']['regularMarketPrice']
+        return price
+    except Exception as e:
+        print(f"伦敦金解析异常: {e}")
         return None
 
 def get_shanghai_gold():
-    """获取上海黄金交易所 Au9999 价格 (人民币/克)"""
-    # 使用新浪财经接口
-    url = "https://hq.sinajs.cn/list=s_au9999"
-    headers = {'Referer': 'https://finance.sina.com.cn'} # 新浪要求有 Referer
+    print("\n--- 尝试获取上海金 ---")
+    # 换一个更宽松的新浪接口
+    url = "http://hq.sinajs.cn/list=s_au9999"
+    headers = {
+        'Referer': 'http://finance.sina.com.cn',
+        'User-Agent': 'Mozilla/5.0'
+    }
     try:
-        res = requests.get(url, headers=headers, timeout=10)
-        # 返回格式类似: var hq_str_s_au9999="Au9999,620.50,1.20,0.19%,0,0";
-        data = res.text
-        match = re.search(r'"([^"]+)"', data)
+        res = requests.get(url, headers=headers, timeout=15)
+        print(f"新浪状态码: {res.status_code}")
+        # 新浪返回的是 GBK 编码，需特殊处理
+        res.encoding = 'gbk'
+        content = res.text
+        print(f"新浪返回原始内容: {content}")
+        
+        match = re.search(r'"([^"]+)"', content)
         if match:
             fields = match.group(1).split(',')
-            return fields[1] # 第二个字段是当前价
+            if len(fields) > 1:
+                return fields[1]
         return None
-    except:
+    except Exception as e:
+        print(f"上海金解析异常: {e}")
         return None
-
-def send_to_slack(london_price, shanghai_price):
-    webhook_url = os.environ.get('SLACK_WEBHOOK_URL')
-    if not webhook_url:
-        return
-
-    payload = {
-        "blocks": [
-            {
-                "type": "header",
-                "text": {
-                    "type": "plain_text",
-                    "text": "📊 全球黄金实时行情",
-                    "emoji": True
-                }
-            },
-            {
-                "type": "section",
-                "fields": [
-                    {
-                        "type": "mrkdwn",
-                        "text": f"*伦敦金 (现货):*\n`${london_price or '获取失败'}` USD/oz"
-                    },
-                    {
-                        "type": "mrkdwn",
-                        "text": f"*上海金 (Au9999):*\n`￥{shanghai_price or '获取失败'}` CNY/g"
-                    }
-                ]
-            },
-            {
-                "type": "context",
-                "elements": [
-                    {
-                        "type": "mrkdwn",
-                        "text": "💡 *提示：* 1盎司 ≈ 31.1克。内外盘价差可反映汇率波动及溢价。"
-                    }
-                ]
-            }
-        ]
-    }
-    
-    requests.post(webhook_url, json=payload)
 
 if __name__ == "__main__":
     l_price = get_london_gold()
     s_price = get_shanghai_gold()
     
-    if l_price or s_price:
-        send_to_slack(l_price, s_price)
-        print(f"推送成功: 伦敦 {l_price}, 上海 {s_price}")
-    else:
-        print("所有数据抓取失败")
+    print("\n--- 最终结果 ---")
+    print(f"伦敦金: {l_price}")
+    print(f"上海金: {s_price}")
+    
+    # 只有成功获取到至少一个价格时才尝试推送
+    webhook_url = os.environ.get('SLACK_WEBHOOK_URL')
+    if (l_price or s_price) and webhook_url:
+        payload = {"text": f"📢 监控测试\n伦敦金: {l_price}\n上海金: {s_price}"}
+        requests.post(webhook_url, json=payload)
